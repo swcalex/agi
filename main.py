@@ -1,83 +1,89 @@
+import sys
 import numpy as np
-from model import MLP
+import model  # Module A
+import visualization_utils  # Module C
 
 def main():
-    # 학습 데이터 셋 고정
+    # 데이터 설정 (XOR 문제)
     X = np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
-    Y = np.array([[0], [1], [1], [0]])
-    model = None
-
+    y = np.array([[0], [1], [1], [0]])
+    
+    params = None
+    learning_rate = 0.1
+    
+    print("=== Simple MLP Project (v0.3.0) ===")
+    
     while True:
-        print("\n=== MLP Project Main Menu ===")
+        print("\n[Menu]")
         print("1. Initialization")
-        print("2. Forward Propagation (Inference)")
+        print("2. Forward Propagation (Test)")
         print("3. Backpropagation & Training")
-        print("4. Exit")
+        print("4. Visualization (Decision Boundary)")
+        print("5. Exit")
         
-        choice = input("원하는 메뉴를 선택하세요: ")
-
+        choice = input("Select Number: ")
+        
         if choice == '1':
-            # 초기화 모듈 실행
-            model = MLP(n_in=2, n_h=4, n_out=1, lr=0.1)
-            print("\n[알림] 모델 가중치 및 편향이 초기화되었습니다.")
-
+            input_size = 2
+            hidden_size = int(input("Enter Hidden Layer Size (default: 4): ") or 4)
+            output_size = 1
+            params = model.init_params(input_size, hidden_size, output_size)
+            print(">> Model Initialized.")
+            
         elif choice == '2':
-            # 전방 연산 서브 메뉴
-            if model is None:
-                print("\n[오류] 먼저 모델을 초기화(1번)해 주세요.")
+            if params is None:
+                print("!! Error: Model not initialized. Please run step 1.")
                 continue
             
-            while True:
-                print("\n--- Forward Propagation Sub-Menu ---")
-                print("1. Input Data")
-                print("2. Exit to Main Menu")
-                sub_choice = input("선택하세요: ")
+            # 전체 데이터에 대해 테스트
+            y_pred, _ = model.forward(params, X)
+            print("\n>> Test Results (Input -> Prediction):")
+            for i in range(len(X)):
+                print(f"   {X[i]} -> {y_pred[i][0]:.4f}")
                 
-                if sub_choice == '1':
-                    try:
-                        user_input = input("두 개의 입력을 입력하세요 (예: 0 1): ")
-                        x_user = np.array([list(map(int, user_input.split()))])
-                        raw_val = model.forward(x_user)
-                        final_val = 1 if raw_val >= 0.5 else 0
-                        print(f"결과: {final_val} (실수값: {raw_val[0][0]:.4f})")
-                    except Exception as e:
-                        print(f"입력 형식이 잘못되었습니다. (에러: {e})")
-                elif sub_choice == '2':
-                    break
-                else:
-                    print("올바른 메뉴를 선택해 주세요.")
-
         elif choice == '3':
-            # 학습 모듈 실행
-            if model is None:
-                print("\n[오류] 먼저 모델을 초기화(1번)해 주세요.")
+            if params is None:
+                print("!! Error: Model not initialized. Please run step 1.")
+                continue
+                
+            epochs = int(input("Enter Epochs (e.g., 10000): "))
+            
+            print(f">> Training started for {epochs} epochs...")
+            for i in range(epochs):
+                # 1. Forward
+                y_pred, hidden = model.forward(params, X)
+                
+                # 2. Backward
+                grads = model.backward(params, X, y, y_pred, hidden)
+                
+                # 3. Update
+                params = model.update_params(params, grads, learning_rate)
+                
+                if i % 1000 == 0:
+                    loss = np.mean(np.square(y - y_pred))
+                    print(f"   Epoch {i}: Loss {loss:.6f}")
+            
+            print(">> Training Complete.")
+            
+        elif choice == '4':
+            if params is None:
+                print("!! Error: Model not initialized. Please run step 1.")
                 continue
             
-            try:
-                epochs = int(input("학습할 에폭(Epoch) 횟수를 입력하세요: "))
-                print(f"\n학습 진행 중 (Total: {epochs})...")
-                
-                for epoch in range(epochs):
-                    # 데이터 셔플링
-                    indices = np.arange(X.shape[0])
-                    np.random.shuffle(indices)
-                    for i in indices:
-                        x_i, y_i = X[i:i+1], Y[i:i+1]
-                        output = model.forward(x_i)
-                        model.backward(x_i, y_i, output)
-                    
-                    if (epoch + 1) % 1000 == 0:
-                        loss = model.get_loss(Y, model.forward(X))
-                        print(f"Epoch [{epoch+1}/{epochs}] - Loss: {loss:.6f}")
-                print("학습이 완료되었습니다.")
-            except ValueError:
-                print("숫자를 입력해 주세요.")
-
-        elif choice == '4':
-            print("프로그램을 종료합니다.")
-            break
+            print(">> Generating Decision Boundary Plot...")
+            
+            # 시각화 모듈 호출
+            # model.forward는 (y_pred, hidden)을 반환하므로, y_pred만 반환하는 래퍼 함수 전달
+            predict_wrapper = lambda p, x: model.forward(p, x)[0]
+            
+            visualization_utils.plot_decision_boundary(params, predict_wrapper, X, y)
+            
+        elif choice == '5':
+            print("Exiting program.")
+            sys.exit()
+            
         else:
-            print("올바른 메뉴를 선택해 주세요.")
+            print("!! Invalid choice. Try again.")
 
 if __name__ == "__main__":
     main()
