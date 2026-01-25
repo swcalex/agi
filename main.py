@@ -1,110 +1,99 @@
 import sys
 import torch
 import torch.nn as nn
+import torch.nn.init as init
 import torch.optim as optim
-import model              # Module A
-import visualization_utils # Module C
+import model              
+import visualization_utils 
 
 def main():
-    # 데이터 설정 (XOR 문제) - PyTorch Tensor로 변환 (float32)
-    # GPU 사용 가능 시 .to('cuda')를 붙일 수 있음 (현재는 CPU)
-    X = torch.tensor([[0, 0], [0, 1], [1, 0], [1, 1]], dtype=torch.float32)
-    y = torch.tensor([[0], [1], [1], [0]], dtype=torch.float32)
+    print("=== Project AI: 4-Bit Binary to Decimal (v0.5.0) ===")
     
-    # 모델 및 학습 도구 변수
+    # 1. 데이터 설정 (0~15 모든 케이스)
+    # X: [x3, x2, x1, x0]
+    X_data = []
+    y_data = []
+    
+    for i in range(16):
+        # 정수를 4비트 리스트로 변환 (예: 3 -> [0, 0, 1, 1])
+        # format(i, '04b') returns string '0011'
+        binary_str = format(i, '04b')
+        bin_list = [int(b) for b in binary_str]
+        
+        X_data.append(bin_list)
+        # y는 0~1 사이로 정규화 (i / 15.0)
+        y_data.append([i / 15.0])
+        
+    X = torch.tensor(X_data, dtype=torch.float32)
+    y = torch.tensor(y_data, dtype=torch.float32)
+    
     net = None
     criterion = None
     optimizer = None
     
-    print("=== Project AI: PyTorch MLP (v0.4.0) ===")
-    
     while True:
         print("\n[Menu]")
-        print("1. Initialization (Build Model)")
-        print("2. Forward Propagation (Test)")
-        print("3. Backpropagation & Training")
-        print("4. Visualization (Decision Boundary)")
+        print("1. Initialization")
+        print("2. Forward Test")
+        print("3. Training (Backpropagation)")
+        print("4. Visualization (2x2 Grid)")
         print("5. Exit")
         
-        choice = input("Select Number: ")
+        choice = input("Select: ")
         
         if choice == '1':
-            # 모델 인스턴스 생성
             net = model.SimpleMLP()
-            
-            # 손실 함수: 이진 교차 엔트로피 (Binary Cross Entropy)
             criterion = nn.BCELoss()
-            
-            # 옵티마이저: Adam (학습률 0.01 권장)
-            # SGD보다 수렴 속도가 훨씬 빠르고 안정적임
             optimizer = optim.Adam(net.parameters(), lr=0.01)
-            
-            print(">> Model Built with PyTorch.")
-            print(f"   Structure: {net}")
-            print("   Optimizer: Adam, Loss: BCELoss")
+            print(">> Model Initialized (4-In, 200-Hidden, 1-Out).")
             
         elif choice == '2':
             if net is None:
-                print("!! Error: Model not initialized. Please run step 1.")
+                print("!! Initialize first.")
                 continue
-            
-            # 추론 시에는 기울기 계산 불필요 (no_grad)
             with torch.no_grad():
                 outputs = net(X)
-                
-            print("\n>> Test Results (Input -> Prediction):")
+            
+            print("\n>> Prediction Result:")
+            print("Input (Bin) -> Target (Dec) -> Pred (Raw) -> Pred (Dec)")
             for i in range(len(X)):
-                input_val = X[i].tolist()
-                pred_val = outputs[i].item()
-                print(f"   {input_val} -> {pred_val:.4f}")
+                bin_input = X[i].tolist() # [0,0,1,1]
+                target_dec = int(y[i].item() * 15)
+                pred_raw = outputs[i].item()
+                pred_dec = int(round(pred_raw * 15))
+                
+                # Check accuracy
+                mark = "O" if target_dec == pred_dec else "X"
+                print(f"{bin_input} -> {target_dec:2d} -> {pred_raw:.4f} -> {pred_dec:2d} [{mark}]")
                 
         elif choice == '3':
             if net is None:
-                print("!! Error: Model not initialized. Please run step 1.")
+                print("!! Initialize first.")
                 continue
-                
-            epochs_input = input("Enter Epochs (default: 1000): ")
-            epochs = int(epochs_input) if epochs_input else 1000
+            epochs_input = input("Epochs (default 1000): ")
+            epochs = int(epochs_input) if epochs_input else 5000
             
+            net.train()
             print(f">> Training started for {epochs} epochs...")
-            
-            net.train() # 학습 모드 전환
-            
             for i in range(epochs):
-                # 1. 기울기 초기화 (누적 방지)
                 optimizer.zero_grad()
-                
-                # 2. 순전파
-                outputs = net(X)
-                
-                # 3. 손실 계산
-                loss = criterion(outputs, y)
-                
-                # 4. 역전파 (Autograd가 자동으로 기울기 계산)
+                out = net(X)
+                loss = criterion(out, y)
                 loss.backward()
-                
-                # 5. 가중치 갱신
                 optimizer.step()
                 
-                if i % 100 == 0:
-                    print(f"   Epoch {i}: Loss {loss.item():.6f}")
-            
-            print(">> Training Complete.")
+                if i % 1000 == 0:
+                    print(f"Epoch {i}: Loss {loss.item():.6f}")
+            print(">> Training Done.")
             
         elif choice == '4':
             if net is None:
-                print("!! Error: Model not initialized. Please run step 1.")
+                print("!! Initialize first.")
                 continue
-            
-            # PyTorch 모델 객체와 텐서 데이터를 그대로 전달
             visualization_utils.plot_decision_boundary(net, X, y)
             
         elif choice == '5':
-            print("Exiting program.")
             sys.exit()
-            
-        else:
-            print("!! Invalid choice. Try again.")
 
 if __name__ == "__main__":
     main()

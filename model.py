@@ -5,9 +5,9 @@ import torch.nn.init as init
 class SimpleMLP(nn.Module):
     def __init__(self):
         super(SimpleMLP, self).__init__()
-        # 하이퍼파라미터 설정
-        self.input_size = 2
-        self.hidden_size = 200  # Wide Network 전략
+        # 하이퍼파라미터 설정 (Spec v0.5.0)
+        self.input_size = 4   # 4-bit input
+        self.hidden_size = 200  # Wide Network
         self.output_size = 1
         
         # 레이어 정의
@@ -25,7 +25,6 @@ class SimpleMLP(nn.Module):
     def _init_weights(self):
         """
         Xavier (Glorot) Initialization 적용
-        노드 수가 많아짐(200개)에 따른 출력 분산 폭발 방지
         """
         init.xavier_normal_(self.fc1.weight)
         init.zeros_(self.fc1.bias)
@@ -36,12 +35,8 @@ class SimpleMLP(nn.Module):
         """
         순전파 (Forward Propagation)
         """
-        # 은닉층: 선형 변환 -> 활성화 함수
         out = self.fc1(x)
         out = self.activation(out)
-        
-        # 출력층: 선형 변환 -> 활성화 함수 (확률값 0~1)
         out = self.fc2(out)
         out = self.activation(out)
-        
         return out
