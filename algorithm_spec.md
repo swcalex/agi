@@ -1,4 +1,4 @@
-# Algorithm Specification: v0.5.0 (4-Bit Binary to Decimal)
+# Algorithm Specification: v0.5.1 (Monitoring & Transparency)
 
 ## 1. 모델 정의 (Model Definition)
 본 모델은 4비트 이진 입력 $\mathbf{x} \in \{0, 1\}^4$를 받아, 10진수 값에 대응하는 확률 $y \in (0, 1)$을 출력하는 MLP이다.
@@ -17,18 +17,13 @@ y &= \sigma(\mathbf{W}_2 \mathbf{h} + \mathbf{b}_2)
 \end{aligned}
 $$
 * $\sigma(z) = \frac{1}{1 + e^{-z}}$ (Sigmoid)
-* $\mathbf{W}_1 \in \mathbb{R}^{200 \times 4}, \mathbf{b}_1 \in \mathbb{R}^{200}$
-* $\mathbf{W}_2 \in \mathbb{R}^{1 \times 200}, \mathbf{b}_2 \in \mathbb{R}^{1}$
 
 ### 1.3 출력의 해석 (Interpretation)
-모델의 출력 $y$는 $0$부터 $15$까지의 정수 값 $d$로 변환된다.
 $$
 \hat{d} = \text{round}(y \times 15)
 $$
-* 즉, 결정 경계(Decision Boundary)는 $y$ 공간에서 $1/30, 3/30, ..., 29/30$ 지점에 형성된다.
 
 ## 2. 학습 알고리즘 (Learning Algorithm)
-본 모델은 **역전파 알고리즘(Backpropagation)**을 통해 파라미터를 갱신한다.
 
 ### 2.1 역전파 (Backpropagation)
 $$
@@ -36,11 +31,29 @@ $$
 $$
 
 ### 2.2 최적화 목표 (Optimization Goal)
-* **Objective**: Binary Cross Entropy (BCE) 최소화 (Experimental)
-  $$L = - \frac{1}{N} \sum_{i=1}^{N} [t_i \log(y_i) + (1-t_i) \log(1-y_i)]$$
-* **Target Scaling**: 정수 정답 $d_{true} \in \{0, ..., 15\}$는 다음과 같이 스케일링되어 $t_i$로 사용된다.
-  $$t_i = \frac{d_{true}}{15}$$
+* **Objective**: Binary Cross Entropy (BCE)
+  $$L_{BCE} = - \frac{1}{N} \sum_{i=1}^{N} [t_i \log(y_i) + (1-t_i) \log(1-y_i)]$$
+* **Target Scaling**: $t_i = \frac{d_{true}}{15}$
+
+### 2.3 관측 지표 (Monitoring Metric) [NEW]
+학습의 직관적 파악을 위해 MAE(Mean Absolute Error)를 보조 지표로 사용한다. 역전파에는 관여하지 않는다.
+$$
+L_{MAE} = \frac{1}{N} \sum_{i=1}^{N} | y_i - t_i |
+$$
+* **판단 기준**: $L_{MAE} \approx 0$이면 학습 완료로 간주한다.
 
 ## 3. 초기화 전략 (Initialization)
 * **Weights**: Xavier (Glorot) Normal Initialization.
 * **Bias**: Zero Initialization.
+
+## 4. 시각화 명세 (Visualization Spec) [NEW]
+블랙박스 내부를 해석하기 위해 은닉층의 활성화 패턴을 시각화한다.
+
+### 4.1 Hidden Layer Activation Map
+입력 공간 전체($\mathbf{X}_{all} \in \mathbb{R}^{16 \times 4}$)에 대한 은닉층 반응($\mathbf{H}$)을 히트맵으로 표현한다.
+$$
+\mathbf{H} = \sigma(\mathbf{X}_{all} \mathbf{W}_1^T + \mathbf{b}_1) \in \mathbb{R}^{16 \times 200}
+$$
+* **Axis X**: Hidden Units ($0 \sim 199$)
+* **Axis Y**: Input Integers ($0 \sim 15$)
+* **Value**: Activation Degree ($0.0 \sim 1.0$)

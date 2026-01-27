@@ -5,7 +5,7 @@ import torch.nn.init as init
 class SimpleMLP(nn.Module):
     def __init__(self):
         super(SimpleMLP, self).__init__()
-        # 하이퍼파라미터 설정 (Spec v0.5.0)
+        # 하이퍼파라미터 설정 (Spec v0.5.1)
         self.input_size = 4   # 4-bit input
         self.hidden_size = 200  # Wide Network
         self.output_size = 1
@@ -38,5 +38,14 @@ class SimpleMLP(nn.Module):
         out = self.fc1(x)
         out = self.activation(out)
         out = self.fc2(out)
+        out = self.activation(out)
+        return out
+
+    def get_hidden_features(self, x):
+        """
+        [v0.5.1] 은닉층의 활성화 패턴(Activation Map)을 관측하기 위한 메서드
+        Input -> Hidden (Activated) 값을 반환
+        """
+        out = self.fc1(x)
         out = self.activation(out)
         return out

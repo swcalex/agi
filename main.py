@@ -7,22 +7,18 @@ import model
 import visualization_utils 
 
 def main():
-    print("=== Project AI: 4-Bit Binary to Decimal (v0.5.0) ===")
+    print("=== Project AI: 4-Bit Binary to Decimal (v0.5.1) ===")
     
     # 1. 데이터 설정 (0~15 모든 케이스)
-    # X: [x3, x2, x1, x0]
     X_data = []
     y_data = []
     
     for i in range(16):
-        # 정수를 4비트 리스트로 변환 (예: 3 -> [0, 0, 1, 1])
-        # format(i, '04b') returns string '0011'
         binary_str = format(i, '04b')
         bin_list = [int(b) for b in binary_str]
         
         X_data.append(bin_list)
-        # y는 0~1 사이로 정규화 (i / 15.0)
-        y_data.append([i / 15.0])
+        y_data.append([i / 15.0]) # 0~1 정규화
         
     X = torch.tensor(X_data, dtype=torch.float32)
     y = torch.tensor(y_data, dtype=torch.float32)
@@ -35,9 +31,10 @@ def main():
         print("\n[Menu]")
         print("1. Initialization")
         print("2. Forward Test")
-        print("3. Training (Backpropagation)")
-        print("4. Visualization (2x2 Grid)")
-        print("5. Exit")
+        print("3. Training (Backpropagation with MAE Monitor)")
+        print("4. Visualization (Decision Boundary)")
+        print("5. Visualization (Hidden Layer Heatmap)")
+        print("6. Exit")
         
         choice = input("Select: ")
         
@@ -57,12 +54,11 @@ def main():
             print("\n>> Prediction Result:")
             print("Input (Bin) -> Target (Dec) -> Pred (Raw) -> Pred (Dec)")
             for i in range(len(X)):
-                bin_input = X[i].tolist() # [0,0,1,1]
+                bin_input = X[i].tolist() 
                 target_dec = int(y[i].item() * 15)
                 pred_raw = outputs[i].item()
                 pred_dec = int(round(pred_raw * 15))
                 
-                # Check accuracy
                 mark = "O" if target_dec == pred_dec else "X"
                 print(f"{bin_input} -> {target_dec:2d} -> {pred_raw:.4f} -> {pred_dec:2d} [{mark}]")
                 
@@ -70,20 +66,27 @@ def main():
             if net is None:
                 print("!! Initialize first.")
                 continue
-            epochs_input = input("Epochs (default 1000): ")
-            epochs = int(epochs_input) if epochs_input else 5000
+            epochs_input = input("Epochs (default 900): ")
+            epochs = int(epochs_input) if epochs_input else 1000
             
             net.train()
             print(f">> Training started for {epochs} epochs...")
             for i in range(epochs):
                 optimizer.zero_grad()
                 out = net(X)
+                
+                # BCE Loss (For Gradient Descent)
                 loss = criterion(out, y)
                 loss.backward()
                 optimizer.step()
                 
-                if i % 1000 == 0:
-                    print(f"Epoch {i}: Loss {loss.item():.6f}")
+                # Monitoring (MAE) - 학습에 영향 주지 않음
+                mae = torch.mean(torch.abs(out - y)).item()
+                
+                if i % 100 == 0:
+                    # BCE는 0으로 가지 않지만, MAE는 0으로 수렴해야 함
+                    print(f"Epoch {i}: BCE Loss {loss.item():.6f} | MAE {mae:.6f}")
+                    
             print(">> Training Done.")
             
         elif choice == '4':
@@ -93,6 +96,12 @@ def main():
             visualization_utils.plot_decision_boundary(net, X, y)
             
         elif choice == '5':
+            if net is None:
+                print("!! Initialize first.")
+                continue
+            visualization_utils.plot_hidden_activation_map(net, X)
+
+        elif choice == '6':
             sys.exit()
 
 if __name__ == "__main__":

@@ -16,8 +16,9 @@ PyTorch 기반의 신경망을 다루지만, 핵심 가치는 코드가 아닌 *
 * `main.py`: 학습 및 실험을 수행하는 실행 환경.
 * `visualization_utils.py`: 내부 동작을 검증하기 위한 시각화 도구 (관측 창).
 
-## 3. 현재 단계: v0.5.0 (4-Bit Binary to Decimal)
-* **Objective**: 4비트 입력($0000_2 \sim 1111_2$)을 받아 10진수($0 \sim 15$)로 변환하는 회귀적 능력을 검증한다.
+## 3. 현재 단계: v0.5.1 (Monitoring & Transparency)
+* **Objective**: 학습 상태의 명확한 인지와 블랙박스(Hidden Layer) 내부의 정보 처리 과정을 시각화한다.
 * **Key Feature**:
-    * 4D Input Space Visualization (Slicing Hypercubes)
-    * Regression via Probability (BCE Loss Experiment)
+    * **Metric**: BCE Loss(학습용)와 MAE(관측용)의 이원화.
+    * **Visualization**: Hidden Layer Activation Map (Input vs Neuron Heatmap).
+    * **Target**: 4비트 정수 회귀 문제의 완전한 해석 가능성 확보, 최적의 default epoch 값 재설정
