@@ -66,7 +66,7 @@ def main():
             if net is None:
                 print("!! Initialize first.")
                 continue
-            epochs_input = input("Epochs (default 900): ")
+            epochs_input = input("Epochs (recommended 900): ")
             epochs = int(epochs_input) if epochs_input else 1000
             
             net.train()

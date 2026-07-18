@@ -1,10 +1,12 @@
 import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib
 import torch
+import matplotlib
 
-# 리눅스 환경(GUI 없음) 대응
-matplotlib.use('Agg') 
+# ❗ 가장 먼저 백엔드를 지정
+matplotlib.use('Agg')
+
+# 그 다음에 pyplot을 임포트
+import matplotlib.pyplot as plt
 
 def plot_decision_boundary(model, X_tensor, y_tensor):
     """

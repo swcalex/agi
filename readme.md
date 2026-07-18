@@ -1,24 +1,13 @@
-# Project AI: Mathematical Foundation for AGI
+# Project AGI
 
 ## 1. 개요 (Overview)
-본 프로젝트는 코드 작성을 넘어, **"지능의 알고리즘을 수학적으로 규명하고 구현하는 것"**을 목표로 한다. 
-PyTorch 기반의 신경망을 다루지만, 핵심 가치는 코드가 아닌 **수리적 모델링(`algorithm_spec.md`)**에 있다.
 
-## 2. 프로젝트 구조 (Structure)
+본 프로젝트의 주 목표는 범용 인공지능 모델(AGI)을 개발하는 것이다. 여기서 AGI란 임의로 생각해 낸, 대부분의 사람이 수행 가능한 작업을 똑같이(혹은 더 월등히) 수행할 수 있는 인공지능 모델을 의미하며, 통제 가능한 재귀적 발전 또한 가능해야 한다. 추가로 인간과의 관계에 대한 윤리적인 조건을 항상 고려해야 한다.
 
-### 📄 문서 (Documents)
-* **`README.md`**: 프로젝트 개요 및 지도.
-* **`algorithm_spec.md`**: **[핵심]** AI 모델의 수학적 정의 및 논리 설계도. (Code is just a tool, Math is the core.)
-* **`ai_rule.md`**: Architect(User)와 Engine(AI)의 협업 프로토콜.
+보조 목표는 다음과 같다. 현재의 전문성으로는 인공지능 발전의 최전선에 직접 기여하기 어렵기 때문에, 관련 주제에 관하여 깊이 추론하고 지식을 습득하기 위한 학습의 장으로서 이 프로젝트를 진행한다.
 
-### 🛠 구현체 (Implementation)
-* `model.py`: `algorithm_spec.md`의 수식을 PyTorch로 번역한 신경망 모듈.
-* `main.py`: 학습 및 실험을 수행하는 실행 환경.
-* `visualization_utils.py`: 내부 동작을 검증하기 위한 시각화 도구 (관측 창).
+## 2. 현재 버전의 개발 현황: v0.5.2 (Monitoring & Transparency)
 
-## 3. 현재 단계: v0.5.1 (Monitoring & Transparency)
-* **Objective**: 학습 상태의 명확한 인지와 블랙박스(Hidden Layer) 내부의 정보 처리 과정을 시각화한다.
-* **Key Feature**:
-    * **Metric**: BCE Loss(학습용)와 MAE(관측용)의 이원화.
-    * **Visualization**: Hidden Layer Activation Map (Input vs Neuron Heatmap).
-    * **Target**: 4비트 정수 회귀 문제의 완전한 해석 가능성 확보, 최적의 default epoch 값 재설정
+* **26-07-08**: 부족한 CS 및 프로그래밍 지식 탓에 생성된 코드를 수정하거나 부분적으로 아이디어를 도입하는 과정에서 어려움을 겪었고, 이로 인해 기존 프로젝트 진행 방식에 한계를 느꼈다. 이에 프로젝트를 잠시 중단한 후 기초 지식인 수학과 파이썬 문법을 공부했다. 현재는 다시 프로젝트에 복귀하여, 아키텍트(Architect)가 코드 내용에 더 깊이 관여하는 방향으로 협업 체계(ai_rule.md)를 전면 수정했다. 이를 통해 프로젝트를 더욱 확실하게 제어하고 발전시킬 수 있는 기반을 마련했다.
+
+* **26-07-18**: readme.md 파일의 특성을 살려 프로그램의 개요와 상세한 개발 과정을 직관적으로 파악할 수 있도록 구조를 개편했다. 이와 함께 algorithm_spec.md 파일이 코드의 구조적·기술적 명세를 온전히 반영하도록 수정했다. 이어서 main.py, model.py, visualization_utils.py 등 총 3개의 파이썬 코드 파일을 리뷰했다. 현재는 Git 시스템에서 main 브랜치만을 관리하고 있으나, 필요에 따라 임시로 생성하고 검증 후 main 브랜치에 병합(Merge)하는 research 브랜치 도입을 검토 중이다. 이를 통해 적극적으로 코드를 실험하고, 실패 시 안정적으로 이전 상태로 되돌릴 수 있는 개발 환경을 구축할 수 있을 것으로 기대한다. 현재 모델은 'Binary Information → MLP Model → Real Number(0~1 사이의 값)' 형태로 데이터를 처리한다. 최근 딥러닝 주요 알고리즘을 학습하고 있는 만큼, 다음 단계로는 시각 정보 처리를 위한 CNN(합성곱 신경망) 구조를 직접 구현하며 학습을 깊이 있게 이어가고자 한다.
