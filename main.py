@@ -1,108 +1,115 @@
-import sys
+import os
+import time
+import cv2
 import torch
-import torch.nn as nn
-import torch.nn.init as init
-import torch.optim as optim
-import model              
-import visualization_utils 
+import numpy as np
+from pipeline import FaceRecognitionPipeline
 
-def main():
-    print("=== Project AI: 4-Bit Binary to Decimal (v0.5.1) ===")
+def run_main():
+    print("=== Project AGI: 실시간 인물 인식 시스템 (v0.6.0) ===")
     
-    # 1. 데이터 설정 (0~15 모든 케이스)
-    X_data = []
-    y_data = []
+    # 1. 실행 디바이스 및 파이프라인 초기화
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    print(f">> 연산 디바이스: {device}")
     
-    for i in range(16):
-        binary_str = format(i, '04b')
-        bin_list = [int(b) for b in binary_str]
-        
-        X_data.append(bin_list)
-        y_data.append([i / 15.0]) # 0~1 정규화
-        
-    X = torch.tensor(X_data, dtype=torch.float32)
-    y = torch.tensor(y_data, dtype=torch.float32)
+    pipeline = FaceRecognitionPipeline(min_detection_confidence=0.5, device=str(device))
     
-    net = None
-    criterion = None
-    optimizer = None
-    
-    while True:
-        print("\n[Menu]")
-        print("1. Initialization")
-        print("2. Forward Test")
-        print("3. Training (Backpropagation with MAE Monitor)")
-        print("4. Visualization (Decision Boundary)")
-        print("5. Visualization (Hidden Layer Heatmap)")
-        print("6. Exit")
-        
-        choice = input("Select: ")
-        
-        if choice == '1':
-            net = model.SimpleMLP()
-            criterion = nn.BCELoss()
-            optimizer = optim.Adam(net.parameters(), lr=0.01)
-            print(">> Model Initialized (4-In, 200-Hidden, 1-Out).")
-            
-        elif choice == '2':
-            if net is None:
-                print("!! Initialize first.")
-                continue
-            with torch.no_grad():
-                outputs = net(X)
-            
-            print("\n>> Prediction Result:")
-            print("Input (Bin) -> Target (Dec) -> Pred (Raw) -> Pred (Dec)")
-            for i in range(len(X)):
-                bin_input = X[i].tolist() 
-                target_dec = int(y[i].item() * 15)
-                pred_raw = outputs[i].item()
-                pred_dec = int(round(pred_raw * 15))
-                
-                mark = "O" if target_dec == pred_dec else "X"
-                print(f"{bin_input} -> {target_dec:2d} -> {pred_raw:.4f} -> {pred_dec:2d} [{mark}]")
-                
-        elif choice == '3':
-            if net is None:
-                print("!! Initialize first.")
-                continue
-            epochs_input = input("Epochs (recommended 900): ")
-            epochs = int(epochs_input) if epochs_input else 1000
-            
-            net.train()
-            print(f">> Training started for {epochs} epochs...")
-            for i in range(epochs):
-                optimizer.zero_grad()
-                out = net(X)
-                
-                # BCE Loss (For Gradient Descent)
-                loss = criterion(out, y)
-                loss.backward()
-                optimizer.step()
-                
-                # Monitoring (MAE) - 학습에 영향 주지 않음
-                mae = torch.mean(torch.abs(out - y)).item()
-                
-                if i % 100 == 0:
-                    # BCE는 0으로 가지 않지만, MAE는 0으로 수렴해야 함
-                    print(f"Epoch {i}: BCE Loss {loss.item():.6f} | MAE {mae:.6f}")
-                    
-            print(">> Training Done.")
-            
-        elif choice == '4':
-            if net is None:
-                print("!! Initialize first.")
-                continue
-            visualization_utils.plot_decision_boundary(net, X, y)
-            
-        elif choice == '5':
-            if net is None:
-                print("!! Initialize first.")
-                continue
-            visualization_utils.plot_hidden_activation_map(net, X)
+    # 2. 사전 학습된 가중치(weights.pth) 로드
+    weights_path = "weights.pth"
+    if os.path.exists(weights_path):
+        pipeline.model.load_state_dict(torch.load(weights_path, map_location=device))
+        pipeline.model.eval()
+        print(f">> 학습된 가중치를 성공적으로 로드했습니다: '{weights_path}'")
+    else:
+        print(f"!! 경고: '{weights_path}'를 찾을 수 없습니다. 초기화 상태의 모델로 실행합니다.")
 
-        elif choice == '6':
-            sys.exit()
+    # 3. 웹캠 캡처 초기화 (240p: 320 x 240)
+    cap = cv2.VideoCapture(0)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 320)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 240)
+    
+    if not cap.isOpened():
+        print("!! 웹캠 장치를 열 수 없습니다.")
+        pipeline.close()
+        return
+
+    print(">> 웹캠 구동 시작. (종료: 'q' | 가중치 재로드: 'r')\n")
+
+    # 추론 주기 제어 변수 (2fps -> 0.5초 주기)
+    prev_time = 0.0
+    interval = 0.5
+    current_prob = 0.0
+    last_cropped_face = None
+
+    try:
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                print("프레임을 읽어올 수 없습니다.")
+                break
+
+            current_time = time.time()
+
+            # 0.5초마다 파이프라인 추론 수행
+            if (current_time - prev_time) >= interval:
+                prev_time = current_time
+                prob, cropped = pipeline.predict(frame)
+                current_prob = prob
+                last_cropped_face = cropped
+
+            # ==========================================
+            # UI 시각화 렌더링
+            # ==========================================
+            display_frame = frame.copy()
+            h_frame, w_frame, _ = display_frame.shape
+
+            # 1. 상태 및 확률 텍스트 표시
+            if last_cropped_face is None:
+                status_text = "No Face Detected"
+                color = (128, 128, 128)  # 회색
+            elif current_prob >= 0.5:
+                status_text = f"TARGET MATCH: {current_prob * 100:.1f}%"
+                color = (0, 255, 0)      # 초록색
+            else:
+                status_text = f"NON-TARGET: {current_prob * 100:.1f}%"
+                color = (0, 0, 255)      # 빨간색
+
+            # 텍스트 오버레이
+            cv2.rectangle(display_frame, (5, 5), (w_frame - 5, 40), (0, 0, 0), -1)
+            cv2.putText(display_frame, status_text, (10, 28),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
+
+            # 2. 크롭된 얼굴 PiP 표시 (우측 하단)
+            pip_size = 80
+            if last_cropped_face is not None:
+                pip_face = cv2.resize(last_cropped_face, (pip_size, pip_size))
+            else:
+                pip_face = np.zeros((pip_size, pip_size, 3), dtype=np.uint8)
+
+            # 테두리 및 PiP 삽입
+            display_frame[h_frame - pip_size - 10:h_frame - 10,
+                          w_frame - pip_size - 10:w_frame - 10] = pip_face
+            cv2.rectangle(display_frame,
+                          (w_frame - pip_size - 10, h_frame - pip_size - 10),
+                          (w_frame - 10, h_frame - 10), color, 2)
+
+            cv2.imshow("Project AGI - Real-Time Recognition (240p)", display_frame)
+
+            # 키 입력 처리
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord('q'):
+                break
+            elif key == ord('r'):
+                if os.path.exists(weights_path):
+                    pipeline.model.load_state_dict(torch.load(weights_path, map_location=device))
+                    pipeline.model.eval()
+                    print(f">> 가중치 파일 다시 로드 완료: '{weights_path}'")
+
+    finally:
+        cap.release()
+        pipeline.close()
+        cv2.destroyAllWindows()
+        print("=== 시스템이 안전하게 종료되었습니다 ===")
 
 if __name__ == "__main__":
-    main()
+    run_main()

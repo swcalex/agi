@@ -2,85 +2,365 @@
 
 ## 1. 모델 정의 (Model Definition)
 
-본 모델은 4비트 이진 입력 $\mathbf{x} \in \{0, 1\}^4$ 를 받아, 10진수 값에 대응하는 확률 $y \in (0, 1)$ 을 출력하는 MLP이다.
+본 모델은 240p ($320 \times 240$), 4:3 영상 촬영을 지원하는 웹캠의 영상 정보를 받아, 프레임 내 특정 인물이 존재하는지에 대한 확률 $y \in [0.0, 1.0]$ 을 출력하는 파이프라인 구조이다.
 
 ### 1.1 구조 (Architecture)
 
-* **Input Layer**: $D_{in} = 4$
-  * Input Vector: $\mathbf{x} = [x_3, x_2, x_1, x_0]$ (MSB -> LSB 순서)
-* **Hidden Layer**: $D_{hidden} = 200$ (Wide Strategy)
-* **Output Layer**: $D_{out} = 1$
+[영상 촬영 시작] - [stage 1: MediaPipe Face Detection] - [Crop] - [Resize] - [Transpose & Normalize] - [stage 2: CNN]
 
-### 1.2 순전파 수식 (Forward Propagation)
+### 1.2 데이터의 흐름
 
-$$
-\begin{aligned}
-\mathbf{h} &= \sigma(\mathbf{W}_1 \mathbf{x} + \mathbf{b}_1) \\
-y &= \sigma(\mathbf{W}_2 \mathbf{h} + \mathbf{b}_2)
-\end{aligned}
-$$
-
-* $\sigma(z) = \frac{1}{1 + e^{-z}}$ (Sigmoid)
-
-### 1.3 출력의 해석 (Interpretation)
-
-$$
-\hat{d} = \text{round}(y \times 15)
-$$
-
-## 2. 학습 알고리즘 (Learning Algorithm)
-
-### 2.1 역전파 (Backpropagation)
-
-$$
-\frac{\partial L}{\partial \mathbf{W}} = \frac{\partial L}{\partial y} \cdot \frac{\partial y}{\partial \mathbf{h}} \cdot \frac{\partial \mathbf{h}}{\partial \mathbf{W}}
-$$
-
-### 2.2 최적화 목표 (Optimization Goal)
-
-* **Objective**: Binary Cross Entropy (BCE)
-  
-  출력층의 Sigmoid 활성화 함수와 결합할 때 발생하는 기울기 소실(Gradient Vanishing) 문제를 수학적으로 상쇄하기 위해 사용한다.
-
+* **[영상 촬영 시작]**: 모델 추론 주파수를 2fps로 설정해 0.5초마다 원형 프레임($240 \times 320 \times 3$, uint8) 추출.
+* **[stage 1: MediaPipe Face Detection]**: 1장의 이미지인 원형 프레임 $\rightarrow$ bounding box($x_{min}, y_{min}, w, h$) 반환. `None` 또는 빈 리스트인 `[]`를 반환 시 얼굴 인식 불가능으로 간주하여 모든 단계를 건너뛰고 최종 출력인 $0.0$ (0%)을 결과로 출력.
+* **[Crop]**: 원형 프레임에서 bounding box 영역에 따라 절단. 절단 이미지($h_{face} \times w_{face} \times 3$, uint8) 생성.
+* **[Resize]**: 절단 이미지 $\rightarrow$ 쌍선형 보간법(Bilinear Interpolation)을 적용하여 $112 \times 112 \times 3$ 크기의 이미지 생성.
+* **[Transpose & Normalize]**: 이미지를 PyTorch 텐서 규격으로 수정 및 정규화하여 `image_pytorch_tensor` ($3 \times 112 \times 112$, float32) 생성.
   $$
-  L_{BCE} = - \frac{1}{N} \sum_{i=1}^{N} [t_i \log(y_i) + (1-t_i) \log(1-y_i)]
+  x_{norm} = \frac{x_{pixel}}{255.0}
   $$
+* **[stage 2: CNN]**: PyTorch를 사용하여 가볍고 강력하며 호환성 높은 직접 설계 CNN(SimpleCNN) 모델을 적용.
 
-* **Target Scaling**: $t_i = \frac{d_{true}}{15}$
+## 2. Stage 2 CNN 설계 명세 (CNN Specification)
 
-### 2.3 관측 지표 (Monitoring Metric)
+본 설계는 특징 추출기(Feature Extractor)와 분류기(Classifier)가 결합된 형태의 이진 분류 CNN 구조이다.
 
-학습의 직관적 파악을 위해 MAE(Mean Absolute Error)를 보조 지표로 사용한다. 역전파에는 관여하지 않는다.
+### 2.1 아키텍처 상세 (Architecture Details)
 
-$$
-L_{MAE} = \frac{1}{N} \sum_{i=1}^{N} | y_i - t_i |
-$$
+1. **Input**: $\mathbf{X} \in \mathbb{R}^{3 \times 112 \times 112}$ (RGB 3채널 이미지)
+2. **Conv Layer 1**: 
+   - Input Channels: $3$, Output Channels: $16$
+   - Kernel Size: $3 \times 3$ (※ 공간 커널 크기는 $3 \times 3$이나, 각 필터는 3개의 입력 채널(RGB) 전체를 동시에 커버하므로 실제 필터 텐서 형태는 $16 \times 3 \times 3 \times 3$ 임)
+   - Stride: $1$, Padding: $1$
+   - Output Feature Map: $\mathbf{C}_1 \in \mathbb{R}^{16 \times 112 \times 112}$ (16개의 서로 다른 채널/특징 지도 생성)
+   - Activation Function: ReLU ($\text{ReLU}(z) = \max(0, z)$)
+3. **Max Pooling 1**:
+   - Kernel Size: $2 \times 2$, Stride: $2$
+   - Output Feature Map: $\mathbf{P}_1 \in \mathbb{R}^{16 \times 56 \times 56}$
+4. **Conv Layer 2**:
+   - Input Channels: $16$, Output Channels: $32$
+   - Kernel Size: $3 \times 3$ (※ 실제 필터 텐서 형태는 $32 \times 16 \times 3 \times 3$ 임)
+   - Stride: $1$, Padding: $1$
+   - Output Feature Map: $\mathbf{C}_2 \in \mathbb{R}^{32 \times 56 \times 56}$ (32개의 채널/특징 지도 생성)
+   - Activation Function: ReLU
+5. **Max Pooling 2**:
+   - Kernel Size: $2 \times 2$, Stride: $2$
+   - Output Feature Map: $\mathbf{P}_2 \in \mathbb{R}^{32 \times 28 \times 28}$
+6. **Flatten & Fully Connected Layer**:
+   - Flatten Dimension: $32 \times 28 \times 28 = 25,088$
+   - Hidden Layer 1 (Wide Strategy): $25,088 \rightarrow 200$ (기존 MLP 은닉층 구조와의 호환 및 비교 용이)
+   - Activation Function: Sigmoid
+7. **Output Layer**:
+   - Output Dimension: $200 \rightarrow 1$
+   - Activation Function: Sigmoid
+   - Output: $y \in [0.0, 1.0]$ (특정 인물일 확률)
 
-* **판단 기준**: $L_{MAE} \approx 0$ 이면 학습 완료로 간주한다.
+## 3. Stage 2 학습 및 역전파 알고리즘 (Stage 2 Learning & Backpropagation)
 
-## 3. 초기화 전략 (Initialization)
+### 3.1 오차 및 손실 함수 설정 (Loss Function & Error Metrics)
 
-* **Weights**: Xavier (Glorot) Normal Initialization. (입출력 분산을 일정하게 유지하여 초기 기울기 흐름을 안정화)
-* **Bias**: Zero Initialization.
+본 모델은 특정 인물의 존재 여부를 판단하는 이진 분류(Binary Classification) 문제이므로, 학습과 평가를 위한 오차 및 손실 함수를 다음과 같이 설정한다.
 
-## 4. 관측 및 검증 (Observation & Verification)
+1. **학습 손실 함수 (Primary Loss - Binary Cross Entropy, BCE)**:
+   - 출력값 $y \in [0.0, 1.0]$과 정답 레이블 $t \in \{0.0, 1.0\}$ 간의 차이를 계산하여 역전파(Backpropagation)의 최적화 목표로 사용한다.
+   - 출력층의 Sigmoid 활성화 함수와 결합할 때 발생하는 기울기 소실(Gradient Vanishing) 문제를 수학적으로 상쇄한다.
+   
+   $$
+   L_{BCE} = - \frac{1}{N} \sum_{i=1}^{N} [t_i \log(y_i) + (1-t_i) \log(1-y_i)]
+   $$
 
-신경망 내부의 정보 처리 과정과 의사 결정 기준을 수학적으로 관측하고 검증한다.
+2. **관측 및 평가 보조 지표 (Monitoring Metric - Mean Absolute Error, MAE)**:
+   - 모델이 실제로 얼마나 정확하게 확률을 예측하고 있는지 직관적으로 파악하기 위한 보조 지표로 사용한다. (역전파에는 직접 관여하지 않음)
+   
+   $$
+   L_{MAE} = \frac{1}{N} \sum_{i=1}^{N} | y_i - t_i |
+   $$
 
-### 4.1 은닉층 활성화 맵 (Hidden Layer Activation Map)
+   - **판단 기준**: 학습 과정에서 $L_{MAE} \approx 0$ 에 수렴하면 학습이 원활하게 완료된 것으로 간주한다.
 
-입력 공간 전체 (4비트의 모든 경우의 수, $\mathbf{X}_{all} \in \mathbb{R}^{16 \times 4}$ ) 에 대한 은닉층의 전반적인 반응 $\mathbf{H}$ 를 추적하여, 각 뉴런이 어떤 패턴에 활성화되는지 확인한다.
+### 3.2 역전파 알고리즘 및 출력층 그레디언트 (Backpropagation & Output Layer Gradients)
 
-$$
-\mathbf{H} = \sigma(\mathbf{X}_{all} \mathbf{W}_1^T + \mathbf{b}_1) \in \mathbb{R}^{16 \times 200}
-$$
+출력층(Fully Connected Layer + Sigmoid) 단계에서 BCE 손실 함수를 최소화하기 위해 Chain Rule을 적용하여 그레디언트를 구하고 에러를 전파한다.
 
-* **Axis X**: Hidden Units ($0 \sim 199$)
-* **Axis Y**: Input Integers ($0 \sim 15$)
-* **Value**: Activation Degree ($0.0 \sim 1.0$)
+1. **출력층 에러 및 그레디언트 ($\delta^{\text{out}}$)**:
+   - Sigmoid 활성화 함수 적용 전의 선형 출력값을 $z$, 최종 예측 확률을 $y = \sigma(z)$라 할 때, BCE 손실 함수와 Sigmoid의 도함수가 결합되어 오차 신호 $\delta^{\text{out}}$는 다음과 같이 매우 간결하게 유도된다.
+   
+   $$
+   \delta^{\text{out}} = \frac{\partial L}{\partial z} = y - t
+   $$
+   
+   (여기서 $t$는 특정 인물의 존재 여부를 나타내는 타겟 레이블(Target Value, $t \in \{0.0, 1.0\}$)이다.)
 
-### 4.2 결정 경계 (Decision Boundary)
+2. **분류기 가중치 및 편향 그레디언트**:
+   - 출력층 가중치 $\mathbf{W}_{\text{out}}$과 편향 $b_{\text{out}}$에 대한 손실 함수의 기울기는 다음과 같다.
+   
+   $$
+   \frac{\partial L}{\partial \mathbf{W}_{\text{out}}} = \delta^{\text{out}} \mathbf{h}^{\top}, \quad \frac{\partial L}{\partial b_{\text{out}}} = \delta^{\text{out}}
+   $$
+   
+   (여기서 $\mathbf{h}$는 이전 은닉층에서 전달된 활성화 값이다.)
 
-고차원(4차원)의 입력 공간 중 2개의 비트를 상수로 고정(Slicing)하고, 나머지 2개 비트의 연속적인 2차원 평면 공간에서 모델의 예측 확률 $y$ 가 어떻게 변화하는지 등고선(Contour)으로 시각화한다. 
+3. **파라미터 업데이트 (Parameter Update via SGD)**:
+   - 계산된 그레디언트를 바탕으로 경사하강법(Gradient Descent)을 적용하여 모델의 파라미터를 갱신한다. ($\eta$는 학습률(Learning Rate))
+   
+   $$
+   \begin{aligned}
+   \mathbf{W}_{\text{out}} &\leftarrow \mathbf{W}_{\text{out}} - \eta \frac{\partial L}{\partial \mathbf{W}_{\text{out}}} \\
+   b_{\text{out}} &\leftarrow b_{\text{out}} - \eta \frac{\partial L}{\partial b_{\text{out}}}
+   \end{aligned}
+   $$
 
-이를 통해 모델이 이산적인 0과 1의 이진 입력 사이의 미지의 공간을 어떻게 비선형적으로 보간(Interpolation)하고 분할하는지 기하학적으로 검증한다.
+4. **이전 레이어로의 오차 전파 (Chain Rule)**:
+   - 출력층에서 계산된 오차 신호 $\delta^{\text{out}}$는 가중치 전치 행렬과의 곱을 통해 은닉층 및 합성곱층(Conv/Pooling)으로 계속해서 역전파된다.
+
+### 3.3 Fully Connected Hidden Layer 및 Flatten 단계 역전파
+
+출력층에서 계산된 오차 신호 $\delta^{\text{out}}$가 Fully Connected 은닉층(Hidden Layer)과 Flatten 단계를 거쳐 2D 특징 지도(Feature Map) 영역으로 전파되는 과정이다.
+
+1. **Fully Connected 은닉층 오차 전파 ($\delta^{\text{fc}}$)**:
+   - 출력층의 가중치 $\mathbf{W}_{\text{out}}$과 오차 $\delta^{\text{out}}$, 그리고 은닉층의 활성화 함수(Sigmoid) 도함수를 결합하여 은닉층의 오차를 계산한다.
+   
+   $$
+   \delta^{\text{fc}} = (\mathbf{W}_{\text{out}}^{\top} \delta^{\text{out}}) \odot \sigma'(\mathbf{z}^{\text{fc}})
+   $$
+   
+   (여기서 $\odot$은 Hadamard Product(원소별 곱), $\sigma'(z) = \sigma(z)(1 - \sigma(z))$이다.)
+
+2. **은닉층 파라미터 업데이트**:
+   - 은닉층의 가중치 $\mathbf{W}_{\text{fc}}$와 편향 $b_{\text{fc}}$에 대한 그레디언트를 구하고, 동일하게 경사하강법으로 갱신한다.
+   
+   $$
+   \frac{\partial L}{\partial \mathbf{W}_{\text{fc}}} = \delta^{\text{fc}} \mathbf{A}_{\text{prev}}^{\top}, \quad \frac{\partial L}{\partial b_{\text{fc}}} = \delta^{\text{fc}}
+   $$
+   
+   (여기서 $\mathbf{A}_{\text{prev}}$는 은닉층의 입력으로 들어온 Flatten 벡터, 즉 Max Pooling 2의 출력이 1차원으로 평탄화된 값이다.)
+   
+   $$
+   \mathbf{W}_{\text{fc}} \leftarrow \mathbf{W}_{\text{fc}} - \eta \frac{\partial L}{\partial \mathbf{W}_{\text{fc}}}, \quad b_{\text{fc}} \leftarrow b_{\text{fc}} - \eta \frac{\partial L}{\partial b_{\text{fc}}}
+   $$
+
+3. **Flatten 역전파 (Reshape)**:
+   - Max Pooling 2의 3차원 출력 텐서 형태($32 \times 28 \times 28$)로 평탄화(Flatten)되었던 오차 벡터를 다시 원래의 3D 텐서 구조로 복원(Reshape)한다.
+   
+   $$
+   \delta^{\text{pool2}} = \text{Reshape}(\mathbf{W}_{\text{fc}}^{\top} \delta^{\text{fc}}, (32, 28, 28))
+   $$
+
+### 3.4 Max Pooling 2 단계 역전파
+
+Flatten 단계에서 3D 텐서로 복원된 오차 신호 $\delta^{\text{pool2}}$를 Max Pooling 2 레이어의 입력 영역(ReLU 2의 출력 맵)으로 역전파하는 과정이다.
+
+1. **Max Pooling 역전파 원리**:
+   - Max Pooling은 순전파 시 윈도우(예: $2 \times 2$) 내에서 **최댓값(Maximum)을 가졌던 위치**로만 오차 신호를 그대로 전달하고, 나머지 위치의 오차는 $0$으로 처리한다.
+   - 따라서 순전파 시 기억해 둔 인덱스(Mask)를 활용하여 오차를 분배한다.
+
+2. **오차 맵 전달 ($\delta^{\text{relu2}}$)**:
+   - 각 채널별로 Max Pooling 윈도우 내 최댓값 위치에만 $\delta^{\text{pool2}}$의 오차를 매핑하고, 나머지는 0으로 채워진 동일 크기의 오차 맵 $\delta^{\text{relu2}}$를 생성한다.
+   
+   $$
+   \delta^{\text{relu2}} = \text{MaxUnpool}(\delta^{\text{pool2}}, \text{Mask}_{\text{pool2}})
+   $$
+
+### 3.5 ReLU 2 및 Conv Layer 2 단계 역전파
+
+Max Pooling 2를 거쳐 전달된 오차 신호 $\delta^{\text{relu2}}$를 바탕으로, ReLU 2 활성화 함수와 Conv Layer 2의 필터 가중치를 갱신하고 이전 레이어로 오차를 전파하는 과정이다.
+
+1. **ReLU 2 역전파**:
+   - ReLU 활성화 함수의 특성에 따라, 순전파 시 값이 $0$보다 컸던 위치에서는 오차를 그대로 통과시키고, $0$ 이하이었던 위치에서는 오차를 차단($0$으로 설정)한다.
+   
+   $$
+   \delta^{\text{conv2\_out}} = \delta^{\text{relu2}} \odot \mathbb{I}(\mathbf{C}_2 > 0)
+   $$
+   
+   (여기서 $\mathbb{I}$는 인디케이터 함수로, 조건이 참이면 1, 거짓이면 0을 반환한다.)
+
+2. **Conv Layer 2 필터 가중치 및 편향 미분/갱신**:
+   - Conv Layer 2의 커널 $\mathbf{K}_2$에 대한 손실 함수의 기울기는 순전파 때와 동일하게 패딩이 적용된 이전 입력 맵 $\text{Pad}(\mathbf{P}_1)$과 현재 오차 맵 $\delta^{\text{conv2\_out}}$ 간의 교차 상관(Cross-correlation) 연산으로 구한다.
+   
+   $$
+   \frac{\partial L}{\partial \mathbf{K}_2} = \text{Pad}(\mathbf{P}_1) * \delta^{\text{conv2\_out}}
+   $$
+   
+   - 각 출력 채널에 더해지는 편향 $b_2$에 대한 기울기는 해당 채널 오차 맵의 모든 공간 위치(높이, 너비)에 대해 오차를 합산(Sum)하여 구한다.
+   
+   $$
+   \frac{\partial L}{\partial b_2} = \sum_{h, w} \delta^{\text{conv2\_out}}_{:, h, w}
+   $$
+   
+   - 경사하강법을 통해 Conv 2 필터 가중치와 편향을 갱신한다.
+   
+   $$
+   \mathbf{K}_2 \leftarrow \mathbf{K}_2 - \eta \frac{\partial L}{\partial \mathbf{K}_2}, \quad b_2 \leftarrow b_2 - \eta \frac{\partial L}{\partial b_2}
+   $$
+
+3. **이전 레이어로의 오차 전파 ($\delta^{\text{pool1}}$ 구하기)**:
+   - Conv Layer 2의 필터 커널 $\mathbf{K}_2$를 180도 회전(Flip)시킨 $\mathbf{K}_2^{\text{rot180}}$을 현재 오차 맵 $\delta^{\text{conv2\_out}}$에 대해 Full Convolution(전체 합성곱) 연산하여, 이전 레이어인 Max Pooling 1 출력 위치에서의 오차 맵 $\delta^{\text{pool1}}$을 계산한다.
+   
+   $$
+   \delta^{\text{pool1}} = \delta^{\text{conv2\_out}} *_{\text{full}} \mathbf{K}_2^{\text{rot180}}
+   $$
+   
+   (여기서 $*_{\text{full}}$은 경계면 오차 손실을 방지하기 위해 경계 패딩을 포함하여 확장 연산하는 Full Convolution을 의미한다.)
+
+### 3.6 Max Pooling 1, ReLU 1 및 Conv Layer 1 단계 역전파
+
+Conv Layer 2에서 전달받은 오차 신호 $\delta^{\text{pool1}}$을 받아, Feature Extractor의 최전단 레이어들(Max Pooling 1 $\rightarrow$ ReLU 1 $\rightarrow$ Conv Layer 1)에 대해 역전파를 수행하고 최초 필터 가중치 $\mathbf{K}_1$ 및 편향 $b_1$을 최종 갱신하는 과정이다.
+
+1. **Max Pooling 1 역전파 ($\delta^{\text{relu1}}$)**:
+   - 순전파 시 기억해 둔 인덱스 Mask($\text{Mask}_{\text{pool1}}$)를 활용하여, $2 \times 2$ 윈도우 내 최댓값이었던 위치로만 오차 $\delta^{\text{pool1}}$을 복원 및 전파한다.
+   
+   $$
+   \delta^{\text{relu1}} = \text{MaxUnpool}(\delta^{\text{pool1}}, \text{Mask}_{\text{pool1}})
+   $$
+
+2. **ReLU 1 역전파 ($\delta^{\text{conv1\_out}}$)**:
+   - 순전파 시 Conv 1의 선형 출력 $\mathbf{C}_1$이 $0$보다 컸던 위치의 오차만 통과시킨다.
+   
+   $$
+   \delta^{\text{conv1\_out}} = \delta^{\text{relu1}} \odot (\mathbf{C}_1 > 0)
+   $$
+
+3. **Conv Layer 1 필터 가중치 및 편향 미분/갱신**:
+   - 최초 입력 이미지 $\mathbf{X} \in \mathbb{R}^{3 \times 112 \times 112}$에 패딩을 적용한 $\text{Pad}(\mathbf{X})$와 현재 오차 맵 $\delta^{\text{conv1\_out}}$ 간의 교차 상관 연산을 통해 Conv 1의 필터 가중치 $\mathbf{K}_1$ 기울기를 구한다.
+   
+   $$
+   \frac{\partial L}{\partial \mathbf{K}_1} = \text{Pad}(\mathbf{X}) * \delta^{\text{conv1\_out}}
+   $$
+   
+   - 해당 채널 오차 맵의 모든 공간 위치(높이, 너비)를 합산하여 편향 $b_1$의 기울기를 구한다.
+   
+   $$
+   \frac{\partial L}{\partial b_1} = \sum_{h, w} \delta^{\text{conv1\_out}}_{:, h, w}
+   $$
+   
+   - 경사하강법을 이용하여 Conv 1의 필터 가중치 $\mathbf{K}_1$과 편향 $b_1$을 최종 갱신한다.
+   
+   $$
+   \mathbf{K}_1 \leftarrow \mathbf{K}_1 - \eta \frac{\partial L}{\partial \mathbf{K}_1}, \quad b_1 \leftarrow b_1 - \eta \frac{\partial L}{\partial b_1}
+   $$
+
+4. **학습 파이프라인의 종결**:
+   - $\mathbf{X}$는 외부 입력(웹캠 데이터)이므로 더 이상 이전 레이어로 오차를 전파하지 않고 1회 역전파(Backpropagation) 파이프라인을 종료한다.
+
+## 4. 초기화 전략 (Initialization)
+
+본 모델(Stage 2 CNN)의 학습 안정성과 초기 기울기 흐름을 최적화하기 위해, 각 레이어의 특성에 맞춘 가중치 및 편향 초기화 전략을 적용한다.
+
+### 4.1 가중치 초기화 (Weights Initialization)
+활성화 함수의 특성과 레이어 종류에 따라 분산이 소실되거나 폭발하지 않도록 적절한 초기화 기법을 이원화하여 적용한다.
+
+1. **합성곱 층 (Conv Layers: $\mathbf{K}_1, \mathbf{K}_2$)**:
+   - **적용 기법**: **He (Kaiming) Normal Initialization**
+   - **선정 이유**: 합성곱 층 뒤에 **ReLU** 활성화 함수가 연결되므로, 음수 영역에서 값이 소실되는 ReLU의 특성을 고려하여 입력 분산을 효과적으로 유지해 주는 He 초기화를 적용한다.
+
+2. **완전연결 층 (Fully Connected Layers: $\mathbf{W}_{\text{fc}}, \mathbf{W}_{\text{out}}$)**:
+   - **적용 기법**: **Xavier (Glorot) Normal Initialization**
+   - **선정 이유**: 은닉층과 출력층에 **Sigmoid** 활성화 함수를 사용하므로, 입출력의 분산을 일정하게 유지하여 초기 기울기 흐름을 안정화하는 Xavier 초기화를 적용한다. (기존 v0.5.x MLP 구조와의 호환성 유지)
+
+### 4.2 편향 초기화 (Bias Initialization)
+
+1. **모든 레이어의 편향 ($b_1, b_2, b_{\text{fc}}, b_{\text{out}}$)**:
+   - **적용 기법**: **Zero Initialization**
+   - **선정 이유**: 초기 학습 단계에서 뉴런이 한쪽으로 치우치거나 활성화가 죽는 현상을 방지하기 위해 편향은 모두 $0$으로 설정한다.
+
+## 5. Stage 2 학습 데이터셋 전처리 및 증강 명세 (Dataset Preprocessing & Augmentation)
+
+본 절은 오프라인 이미지 파일로부터 Stage 2 CNN 학습에 사용될 데이터셋을 구축, 정규화 및 증강하는 파이프라인을 정의한다.
+
+### 5.1 디렉터리 구성 및 레이블 정의
+* `data/target/`: 타겟 인물 이미지 ($N_{\text{target}} = 30$, Target Label $t = 1.0$)
+* `data/non_target/`: 타인 및 비타겟 이미지 ($N_{\text{non\_target}} = 30$, Target Label $t = 0.0$)
+
+### 5.2 데이터 전처리 파이프라인
+1. **로드**: OpenCV `cv2.imread()`를 통해 BGR 3채널 원본 이미지 로드.
+2. **Stage 1 필터링**: `FaceDetector.detect_and_crop()`을 실행하여 유효한 얼굴 영역만 추출. (얼굴 미검출 시 해당 이미지는 제외)
+3. **규격화 및 텐서화**: $112 \times 112$ Bilinear Resize $\rightarrow$ RGB 변환 $\rightarrow$ $[0.0, 1.0]$ Float32 정규화 $\rightarrow$ ($3 \times 112 \times 112$) PyTorch 텐서 변환.
+
+### 5.3 데이터 증강 알고리즘 (Data Augmentation Strategy)
+소규모 데이터셋($30 + 30 = 60$ 장)의 과적합을 방지하고 조명/각도 변화에 강건성을 확보하기 위해, 검출된 $112 \times 112$ 정규화 이미지 1장당 6개의 변형본(원형 포함)을 생성하여 **6배 확장($60 \times 6 = 360$ 장)**한다.
+
+1. **원본 (Original)**: 전처리 완료된 기본 텐서
+2. **수평 반전 (Horizontal Flip)**: 얼굴의 좌우 대칭성을 고려하여 $W$ 축 기준 반전
+   $$
+   I_{\text{flip}}(c, y, x) = I(c, y, W - 1 - x)
+   $$
+3. **밝기 증가 (Brightness Boost)**: 조명이 밝은 환경 시뮬레이션 (상한선 $1.0$ 클리핑)
+   $$
+   I_{\text{bright}} = \text{clip}(I \times 1.25, 0.0, 1.0)
+   $$
+4. **밝기 감소 (Brightness Darken)**: 어두운 조명 환경 시뮬레이션
+   $$
+   I_{\text{dark}} = I \times 0.75
+   $$
+5. **대비 증가 (Contrast Adjustment)**: 윤곽 및 그림자 강조
+   $$
+   I_{\text{contrast}} = \text{clip}((I - 0.5) \times 1.3 + 0.5, 0.0, 1.0)
+   $$
+6. **복합 증강 (Flip + Brightness)**: 수평 반전 상태에서 밝기 변화($\times 1.15$) 결합
+
+### 5.4 모델 가중치 저장 (Serialization)
+* 오프라인 배치 학습 완료 후 최적화된 파라미터를 PyTorch `state_dict` 규격인 `weights.pth`로 저장하여 실시간 파이프라인에서 호출할 수 있도록 한다.
+
+## 6. 구현 코드 구조 설계 (Software Architecture Specification)
+
+수학적 명세 및 알고리즘을 유지보수성 높고 확장 가능한 실제 코드로 구현하기 위해, 다음과 같이 모듈 단위의 객체지향 및 레이어드 아키텍처(Layered Architecture)를 설계한다.
+
+### 6.1 파일 및 모듈 구조 (Directory Layout)
+
+```text
+agi/
+├── algorithm_spec.md
+├── ai_rule.md
+├── readme.md
+├── data/                   # [추가] 학습용 정적 이미지 디렉터리
+│   ├── target/             # [추가] 특정 인물 사진 (Label: 1.0)
+│   └── non_target/         # [추가] 타인/비타겟 사진 (Label: 0.0)
+├── model.py
+├── face_detector.py
+├── pipeline.py
+├── trainer.py
+├── train_dataset.py        # [추가] 데이터 로드, 증강, 배치 학습 및 가중치 저장
+├── weights.pth             # [추가] 학습 완료된 모델 파라미터 파일
+└── main.py
+```
+
+### 6.2 주요 클래스 및 역할 명세 (Class Specifications)
+
+1. **`FaceDetector` (`face_detector.py`)**:
+   - **외부 모듈**: `mediapipe.solutions.face_detection` (Google MediaPipe Pre-trained BlazeFace) 및 `opencv-python` (`cv2`).
+   - **역할**: 웹캠 프레임 입력($240 \times 320 \times 3$, uint8, BGR)을 받아 얼굴을 검출하고 Stage 2 텐서 형태로 전처리한다.
+   - **주요 메서드**:
+     - `detect_and_crop(frame: np.ndarray) -> Optional[np.ndarray]`: BGR 프레임을 RGB로 변환 후 MediaPipe로 Bounding Box를 찾고 크롭. 얼굴이 없으면 `None` 반환.
+     - `preprocess(cropped_face: np.ndarray) -> torch.Tensor`: $112 \times 112$ Bilinear Resize, $[0, 1]$ 범위 정규화, Transpose ($H \times W \times C \rightarrow C \times H \times W$) 및 차원 확장 ($1 \times 3 \times 112 \times 112$, float32 PyTorch Tensor).
+
+2. **`SimpleCNN` (`model.py`)**:
+   - **기기/프레임워크**: PyTorch `nn.Module`.
+   - **역할**: Stage 2 이진 분류 네트워크 구조 정의 및 가중치 초기화.
+   - **주요 메서드**:
+     - `__init__()`: Conv1, Conv2, MaxPool, FC1, FC2 레이어 및 활성화 함수(ReLU, Sigmoid) 정의.
+     - `_init_weights()`: Conv 레이어에 He Normal, FC 레이어에 Xavier Normal, 편향에 Zero 초기화 적용.
+     - `forward(x: torch.Tensor) -> torch.Tensor`: 순전파 연산 수행 ($1 \times 3 \times 112 \times 112 \rightarrow 1 \times 1$).
+
+3. **`FaceRecognitionPipeline` (`pipeline.py`)**:
+   - **역할**: `FaceDetector`와 `SimpleCNN`을 하나의 추론 단위로 결합하고 예외 상황을 안전하게 처리.
+   - **주요 메서드**:
+     - `predict(frame: np.ndarray) -> float`:
+       1. `FaceDetector.detect_and_crop` 호출.
+       2. 반환값이 `None`일 경우, Stage 2를 실행하지 않고 즉시 확률 $0.0$ 반환.
+       3. cropped 이미지가 존재할 경우 전처리 후 `SimpleCNN.forward` 실행하여 $y \in [0.0, 1.0]$ 반환.
+
+4. **`ModelTrainer` (`trainer.py`)**:
+   - **역할**: Stage 2 CNN 모델의 역전파, 오차 지표 관측 및 파라미터 업데이트 관리.
+   - **주요 메서드**:
+     - `compute_loss_and_metrics(y_pred: torch.Tensor, target: torch.Tensor)`: Primary Loss($L_{BCE}$)와 Monitoring Metric($L_{MAE}$) 계산.
+     - `train_step(x: torch.Tensor, target: torch.Tensor) -> dict`: Gradient 초기화, Forward, Loss 계산, Backward, Optimizer Step 수행 및 loss/mae dict 반환.
+
+5. **`train_dataset.py`**:
+   - `data/` 디렉터리의 이미지를 Stage 1 전처리 및 6배 증강 후 미니배치 학습 진행, `weights.pth` 파일 생성.
+
+6. **`main.py`**:
+   - **역할**: 프로그램 진입점. OpenCV 웹캠 캡처를 2fps 주기로 구동하며 파이프라인 연동 및 결과를 화면에 시각화.
+
+### 6.3 예외 처리 및 엣지 케이스 (Edge Cases Handling)
+
+- **얼굴 미검출 (No Face Detected)**: Stage 1에서 MediaPipe가 얼굴을 감지하지 못하거나 bounding box 영역이 프레임 범위를 벗어날 경우, Stage 2 연산을 생략하고 예측 확률을 $0.0$으로 처리하여 불필요한 연산을 방지한다.
+- **입력 채널 및 정규화 오류**: OpenCV의 BGR 색상 공간을 MediaPipe 및 PyTorch 입력 기준인 RGB로 반드시 변환하고, uint8($0\sim255$)을 float32($0.0\sim1.0$)로 정확히 정규화한다.
